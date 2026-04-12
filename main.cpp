@@ -3,10 +3,21 @@
 #include <fstream>
 #include <tlhelp32.h>
 #include <string>
+#include <vector>
+#include <time.h>
 
 #pragma comment(lib, "user32.lib")
 
-// --- Gerekli Fonksiyon Tanımları ---
+// --- GİZLİLİK: XOR ŞİFRELEME ---
+// Metinlerin (string) binary içinde açıkça görünmesini engeller
+std::string Crypt(std::string data, char key) {
+    std::string output = data;
+    for (int i = 0; i < data.size(); i++)
+        output[i] = data[i] ^ key;
+    return output;
+}
+
+// --- GİZLİLİK: MANUEL MAP VERİ YAPISI ---
 using f_LoadLibraryA = HINSTANCE(WINAPI*)(const char* lpLibFilename);
 using f_GetProcAddress = FARPROC(WINAPI*)(HMODULE hModule, LPCSTR lpProcName);
 using f_DLL_ENTRY_POINT = BOOL(WINAPI*)(void* hDll, DWORD dwReason, void* pReserved);
@@ -17,7 +28,7 @@ struct MANUAL_MAPPING_DATA {
     BYTE* pBase;
 };
 
-// --- SHELLCODE (Hedef Süreçte Çalışır) ---
+// --- GİZLİLİK: SHELLCODE (Hedef Süreçte Çalışır) ---
 void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
     if (!pData) return;
 
@@ -29,7 +40,7 @@ void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
     auto _LoadLibraryA = pData->pLoadLibraryA;
     auto _GetProcAddress = pData->pGetProcAddress;
 
-    // 1. RELOCATION (Yeniden Adresleme)
+    // 1. RELOCATION
     auto* pRelocDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
     if (pRelocDir->Size) {
         auto* pRelocData = reinterpret_cast<IMAGE_BASE_RELOCATION*>(pBase + pRelocDir->VirtualAddress);
@@ -46,7 +57,7 @@ void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
         }
     }
 
-    // 2. IMPORT (Kütüphaneleri Bağlama)
+    // 2. IMPORT
     auto* pImportDir = &pOptHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (pImportDir->Size) {
         auto* pImportDescr = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(pBase + pImportDir->VirtualAddress);
@@ -54,7 +65,6 @@ void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
             HINSTANCE hLib = _LoadLibraryA(reinterpret_cast<char*>(pBase + pImportDescr->Name));
             auto* pThunk = reinterpret_cast<IMAGE_THUNK_DATA*>(pBase + pImportDescr->FirstThunk);
             auto* pOriginalThunk = reinterpret_cast<IMAGE_THUNK_DATA*>(pBase + pImportDescr->OriginalFirstThunk);
-
             while (pThunk->u1.AddressOfData) {
                 if (IMAGE_SNAP_BY_ORDINAL(pOriginalThunk->u1.Ordinal)) {
                     pThunk->u1.Function = reinterpret_cast<DWORD>(_GetProcAddress(hLib, reinterpret_cast<char*>(pOriginalThunk->u1.Ordinal & 0xFFFF)));
@@ -62,14 +72,13 @@ void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
                     auto* pImportData = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(pBase + pOriginalThunk->u1.AddressOfData);
                     pThunk->u1.Function = reinterpret_cast<DWORD>(_GetProcAddress(hLib, pImportData->Name));
                 }
-                pThunk++;
-                pOriginalThunk++;
+                pThunk++; pOriginalThunk++;
             }
             pImportDescr++;
         }
     }
 
-    // 3. DLL_MAIN ÇALIŞTIR
+    // 3. DLL_MAIN
     if (pOptHeader->AddressOfEntryPoint) {
         auto _DllMain = reinterpret_cast<f_DLL_ENTRY_POINT>(pBase + pOptHeader->AddressOfEntryPoint);
         _DllMain(pBase, DLL_PROCESS_ATTACH, nullptr);
@@ -77,7 +86,7 @@ void __stdcall Shellcode(MANUAL_MAPPING_DATA* pData) {
 }
 
 // --- ANA ENJEKTÖR MOTORU ---
-bool ManualMap(HANDLE hProc, const char* szDllPath) {
+bool ManualMapStealth(HANDLE hProc, const char* szDllPath) {
     std::ifstream File(szDllPath, std::ios::binary | std::ios::ate);
     auto FileSize = File.tellg();
     BYTE* pSrcData = new BYTE[static_cast<UINT_PTR>(FileSize)];
@@ -90,14 +99,14 @@ bool ManualMap(HANDLE hProc, const char* szDllPath) {
 
     BYTE* pTargetBase = static_cast<BYTE*>(VirtualAllocEx(hProc, nullptr, pNtHeaders->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
-    // Bölümleri kopyala
+    // Sections Kopyala
     WriteProcessMemory(hProc, pTargetBase, pSrcData, pNtHeaders->OptionalHeader.SizeOfHeaders, nullptr);
     auto* pSectionHeader = IMAGE_FIRST_SECTION(pNtHeaders);
     for (int i = 0; i < pNtHeaders->FileHeader.NumberOfSections; ++i, ++pSectionHeader) {
         WriteProcessMemory(hProc, pTargetBase + pSectionHeader->VirtualAddress, pSrcData + pSectionHeader->PointerToRawData, pSectionHeader->SizeOfRawData, nullptr);
     }
 
-    // Mapping verilerini hazırla
+    // Mapping Verileri
     MANUAL_MAPPING_DATA data{ 0 };
     data.pLoadLibraryA = LoadLibraryA;
     data.pGetProcAddress = GetProcAddress;
@@ -106,30 +115,53 @@ bool ManualMap(HANDLE hProc, const char* szDllPath) {
     void* pDataAddr = VirtualAllocEx(hProc, nullptr, sizeof(MANUAL_MAPPING_DATA), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     WriteProcessMemory(hProc, pDataAddr, &data, sizeof(MANUAL_MAPPING_DATA), nullptr);
 
-    // Shellcode'u kopyala
+    // Shellcode
     void* pShellcodeAddr = VirtualAllocEx(hProc, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     WriteProcessMemory(hProc, pShellcodeAddr, Shellcode, 0x1000, nullptr);
 
-    // Başlat
     HANDLE hThread = CreateRemoteThread(hProc, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(pShellcodeAddr), pDataAddr, 0, nullptr);
+    
     if (hThread) {
+        WaitForSingleObject(hThread, INFINITE); // Shellcode bitene kadar bekle
         CloseHandle(hThread);
+
+        // --- GİZLİLİK: PE HEADERS SİLME ---
+        // Bellekteki MZ/PE imzalarını temizleyerek tarayıcıları atlatır
+        BYTE* emptyBuffer = new BYTE[4096];
+        memset(emptyBuffer, 0, 4096);
+        DWORD oldProtect;
+        VirtualProtectEx(hProc, pTargetBase, 4096, PAGE_READWRITE, &oldProtect);
+        WriteProcessMemory(hProc, pTargetBase, emptyBuffer, 4096, nullptr);
+        VirtualProtectEx(hProc, pTargetBase, 4096, oldProtect, &oldProtect);
+        delete[] emptyBuffer;
+
         return true;
     }
     return false;
 }
 
 int main() {
-    printf("--- Meine-ManualMapper v2.0 ---\n");
-    std::string targetName = "notepad.exe"; // Otomatik hedef
+    srand(static_cast<unsigned int>(time(NULL)));
     
+    // Rastgele Konsol Başlığı (Statik Analiz Engelleyici)
+    std::string title = "";
+    for(int i=0; i<15; i++) title += (char)(rand() % 26 + 97);
+    SetConsoleTitleA(title.c_str());
+
+    // XOR Şifreli Hedef: "notepad.exe" (Anahtar: 0x55)
+    // Şifreli metin: \x3B\x3A\x21\x30\x25\x34\x31\x75\x30\x2D\x30
+    std::string encTarget = "\x3B\x3A\x21\x30\x25\x34\x31\x75\x30\x2D\x30";
+    std::string target = Crypt(encTarget, 0x55);
+
+    printf("[+] Gizli Motor Aktif. Hedef bekleniyor...\n");
+
     DWORD procId = 0;
     while (!procId) {
         HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         PROCESSENTRY32 pe{ sizeof(pe) };
         if (Process32First(hSnap, &pe)) {
             do {
-                if (!_stricmp(pe.szExeFile, targetName.c_str())) {
+                if (!_stricmp(pe.szExeFile, target.c_str())) {
                     procId = pe.th32ProcessID;
                     break;
                 }
@@ -139,13 +171,18 @@ int main() {
         Sleep(500);
     }
 
+    printf("[!] Hedef Bulundu (PID: %d). Enjekte ediliyor...\n", procId);
+
     HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, procId);
-    if (ManualMap(hProc, "cheat.dll")) {
-        printf("[+] Manual Map Basarili!\n");
-    } else {
-        printf("[-] Enjeksiyon Hatasi!\n");
+    if (hProc) {
+        if (ManualMapStealth(hProc, "cheat.dll")) {
+            printf("[***] BASARILI! Izler silindi.\n");
+        } else {
+            printf("[-] Hata: Enjeksiyon basarisiz.\n");
+        }
+        CloseHandle(hProc);
     }
-    CloseHandle(hProc);
-    system("pause");
+
+    Sleep(3000);
     return 0;
 }
