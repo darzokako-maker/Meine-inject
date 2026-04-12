@@ -10,20 +10,24 @@ jobs:
       - name: Kodları Çek
         uses: actions/checkout@v4
 
-      - name: MSVC (Visual Studio Derleyicisi) Kur
+      - name: MSVC (C++) Kurulumu
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Injector Derle
-        run: cl.exe /EHsc main.cpp /fe:Injector.exe
+        run: cl.exe /EHsc main.cpp user32.lib /fe:Injector.exe
 
       - name: DLL Derle
-        run: cl.exe /LD cheat.cpp /fe:cheat.dll
+        run: cl.exe /LD cheat.cpp user32.lib /fe:cheat.dll
 
-      - name: Dosyaları Paketle
+      - name: Dosyaları Klasöre Topla
+        run: |
+          mkdir hile_paketi
+          move Injector.exe hile_paketi\
+          move cheat.dll hile_paketi\
+
+      - name: Paketi Yukle
         uses: actions/upload-artifact@v4
         with:
           name: Derlenmis-Hile-Seti
-          path: |
-            Injector.exe
-            cheat.dll
-            
+          path: hile_paketi/
+          
