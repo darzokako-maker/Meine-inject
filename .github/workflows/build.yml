@@ -1,0 +1,28 @@
+name: EXE ve DLL Derleyici
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC (C++) Kurulumu
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Injector EXE Derle
+        run: cl.exe /EHsc main.cpp /fe:Injector.exe
+
+      - name: Cheat DLL Derle
+        run: cl.exe /LD cheat.cpp /fe:cheat.dll
+
+      - name: Sonuclari Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Derlenmiş-Dosyalar
+          path: |
+            Injector.exe
+            cheat.dll
+            
