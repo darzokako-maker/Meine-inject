@@ -13,21 +13,20 @@ jobs:
       - name: MSVC (C++) Kurulumu
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Injector Derle
-        run: cl.exe /EHsc main.cpp user32.lib /fe:Injector.exe
+      - name: Dosyaları Derle
+        run: |
+          cl.exe /EHsc main.cpp /link user32.lib /out:Injector.exe
+          cl.exe /LD cheat.cpp /link user32.lib /out:cheat.dll
 
-      - name: DLL Derle
-        run: cl.exe /LD cheat.cpp user32.lib /fe:cheat.dll
-
-      - name: Dosyaları Klasöre Topla
+      - name: Paketleme Kontrolü
         run: |
           mkdir hile_paketi
-          move Injector.exe hile_paketi\
-          move cheat.dll hile_paketi\
+          if (Test-Path "Injector.exe") { move Injector.exe hile_paketi\ }
+          if (Test-Path "cheat.dll") { move cheat.dll hile_paketi\ }
 
       - name: Paketi Yukle
         uses: actions/upload-artifact@v4
         with:
-          name: Derlenmis-Hile-Seti
+          name: Hile-Seti
           path: hile_paketi/
           
