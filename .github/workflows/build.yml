@@ -16,21 +16,21 @@ jobs:
           arch: x64
 
       - name: Injector ve DLL Derle
+        shell: cmd
         run: |
-          cl.exe /EHsc /O2 /std:c++17 /MT main.cpp /link user32.lib /out:MeineInjector.exe
+          cl.exe /EHsc /O2 /std:c++17 /MT main.cpp /link user32.lib /out:Injector.exe
           cl.exe /LD /O2 /std:c++17 /MT cheat.cpp /link user32.lib /out:cheat.dll
 
       - name: Dosyaları Hazırla
-        # PowerShell yerine standart CMD komutlarıyla kopyalayalım
         shell: cmd
         run: |
           mkdir Pro-Set
-          copy MeineInjector.exe Pro-Set\
-          copy cheat.dll Pro-Set\
+          move Injector.exe Pro-Set\
+          move cheat.dll Pro-Set\
 
       - name: Paketi Yukle
         uses: actions/upload-artifact@v4
         with:
-          name: Meine-Hile-Paketi
+          name: Hile-Paketi
           path: Pro-Set/
           
