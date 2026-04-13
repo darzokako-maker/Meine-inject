@@ -1,39 +1,42 @@
-name: Manual Mapper Pro Derleyici
+name: CS2-Stealth-Build
 
-on: [push]
+on: 
+  push:
+    branches: [ "main" ] # Kodunu main branch'ine attığında çalışır
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # Manuel olarak da başlatabilmen için
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Kodları Çek
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: MSVC (C++) Kurulumu
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
 
-      - name: Injector ve DLL Derle
-        shell: cmd
-        run: |
-          cl.exe /EHsc /O2 /std:c++17 /MT main.cpp /link user32.lib /out:Injector.exe
-          cl.exe /LD /O2 /std:c++17 /MT cheat.cpp /link user32.lib /out:cheat.dll
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1.2.0
 
-      - name: Dosyaları Hazırla ve Doğrula
-        shell: cmd
-        run: |
-          mkdir Pro-Set
-          :: Dosyaları kopyala (move yerine copy kullanarak riskleri azaltalım)
-          copy Injector.exe Pro-Set\
-          copy cheat.dll Pro-Set\
-          :: Klasörün içini listele (Loglarda görmek için)
-          dir Pro-Set
+    - name: Restore NuGet Packages
+      run: nuget restore YourSolutionName.sln # .sln dosyanın adıyla değiştir
 
-      - name: Paketi Yukle
-        uses: actions/upload-artifact@v4
-        with:
-          name: Hile-Paketi-Tam
-          path: Pro-Set/ # Klasörün içindeki her şeyi yükle
+    - name: Build Solution (x64 Release)
+      run: |
+        msbuild YourSolutionName.sln `
+        /p:Configuration=Release `
+        /p:Platform=x64 `
+        /p:CharacterSet=MultiByte `
+        /p:PlatformToolset=v143 # VS 2022 kullanır
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: CS2-Stealth-Package
+        path: |
+          x64/Release/YourInjectorName.exe
+          x64/Release/YourDllName.dll
           
