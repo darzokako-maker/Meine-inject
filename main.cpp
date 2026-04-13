@@ -4,16 +4,18 @@
 #include <vector>
 #include <fstream>
 
-// --- GÜVENLİK YAPILARI ---
+// --- AYARLAR VE YAPILAR ---
+#define TARGET_PROCESS "cs2.exe"
+#define DLL_NAME "hile.dll" // DLL adı hile.dll olarak güncellendi
+
 struct MAPPING_DATA {
     void* pImageBase;
     HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
     FARPROC(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
-    UINT_PTR pOriginalRip; // Thread'in geri döneceği adres (Crash engelleyici)
+    UINT_PTR pOriginalRip; 
 };
 
-// --- KRİTİK SHELLCODE (Hedef Süreçte Çalışır) ---
-// Not: __declspec(noinline) derleyicinin bu kodu bozmasını engeller.
+// --- HEDEF SÜREÇTE ÇALIŞACAK SHELLCODE ---
 void __stdcall Shellcode(MAPPING_DATA* pData) {
     BYTE* pBase = (BYTE*)pData->pImageBase;
     auto* pOpt = &((PIMAGE_NT_HEADERS)(pBase + ((PIMAGE_DOS_HEADER)pBase)->e_lfanew))->OptionalHeader;
@@ -57,42 +59,111 @@ void __stdcall Shellcode(MAPPING_DATA* pData) {
         }
     }
 
-    // 3. DLL Entry Point (Hileyi Başlat)
+    // 3. Entry Point Çağrısı
     using f_DllMain = BOOL(WINAPI*)(void*, DWORD, void*);
     ((f_DllMain)(pBase + pOpt->AddressOfEntryPoint))(pBase, DLL_PROCESS_ATTACH, nullptr);
-
-    // 4. CRASH PROTECTION: Orijinal akışa geri dön (Hijacked thread'i kurtar)
-    UINT_PTR pReturnAddr = pData->pOriginalRip;
-    
-    // x64 için JMP RIP temizliği
-    // Bu kısım assembly ile yapılmalıdır veya direkt Return ile desteklenmelidir.
 }
 
-// --- ENJEKTÖR MANTIĞI ---
+// --- YARDIMCI FONKSİYONLAR ---
+DWORD GetPID(const char* procName) {
+    DWORD pid = 0;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe32; pe32.dwSize = sizeof(pe32);
+        if (Process32First(hSnap, &pe32)) {
+            do { if (!_stricmp(pe32.szExeFile, procName)) { pid = pe32.th32ProcessID; break; } } while (Process32Next(hSnap, &pe32));
+        }
+        CloseHandle(hSnap);
+    }
+    return pid;
+}
+
+DWORD GetThreadID(DWORD pid) {
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te; te.dwSize = sizeof(te);
+    if (Thread32First(hSnap, &te)) {
+        do { if (te.th32OwnerProcessID == pid) { CloseHandle(hSnap); return te.th32ThreadID; } } while (Thread32Next(hSnap, &te));
+    }
+    CloseHandle(hSnap);
+    return 0;
+}
+
+// --- ANA ENJEKTÖR MANTIĞI ---
 int main() {
-    printf("[*] CS2 Stealth Injector Baslatiliyor...\n");
+    printf("--- STEALTH INJECTOR V5 (hile.dll Modu) ---\n");
     
-    // [Burada hedef süreci bulma ve DLL'i belleğe yazma kodları yer alır]
-    // ...
-    
-    // Thread Hijacking Kısmı:
-    DWORD threadId = 0; // Hedef oyun thread'i
-    HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, threadId);
+    DWORD pid = 0;
+    printf("[*] %s bekleniyor...\n", TARGET_PROCESS);
+    while (!pid) { pid = GetPID(TARGET_PROCESS); Sleep(500); }
+    printf("[!] Oyun bulundu! PID: %d\n", pid);
+
+    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (!hProc) {
+        printf("[X] Surece erisim saglanamadi!\n");
+        return 1;
+    }
+
+    // 1. DLL Dosyasını Oku
+    std::ifstream file(DLL_NAME, std::ios::binary | std::ios::ate);
+    if (file.fail()) {
+        printf("[X] %s dosyasi bulunamadi!\n", DLL_NAME);
+        CloseHandle(hProc);
+        return 1;
+    }
+
+    auto size = file.tellg();
+    BYTE* pSrcData = new BYTE[(UINT_PTR)size];
+    file.seekg(0, std::ios::beg);
+    file.read((char*)pSrcData, size);
+    file.close();
+
+    PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(pSrcData + ((PIMAGE_DOS_HEADER)pSrcData)->e_lfanew);
+
+    // 2. Bellekte Yer Aç ve Kopyala
+    void* pTargetBase = VirtualAllocEx(hProc, nullptr, ntHeaders->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    WriteProcessMemory(hProc, pTargetBase, pSrcData, ntHeaders->OptionalHeader.SizeOfHeaders, nullptr);
+
+    PIMAGE_SECTION_HEADER pSection = IMAGE_FIRST_SECTION(ntHeaders);
+    for (int i = 0; i < ntHeaders->FileHeader.NumberOfSections; i++) {
+        WriteProcessMemory(hProc, (LPVOID)((uintptr_t)pTargetBase + pSection[i].VirtualAddress), pSrcData + pSection[i].PointerToRawData, pSection[i].SizeOfRawData, nullptr);
+    }
+
+    // 3. Mapping Verilerini Hazırla
+    MAPPING_DATA mData;
+    mData.pImageBase = pTargetBase;
+    mData.pLoadLibraryA = LoadLibraryA;
+    mData.pGetProcAddress = GetProcAddress;
+
+    // 4. Thread Hijacking
+    DWORD tid = GetThreadID(pid);
+    HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, tid);
     SuspendThread(hThread);
 
-    CONTEXT ctx;
-    ctx.ContextFlags = CONTEXT_FULL;
+    CONTEXT ctx; ctx.ContextFlags = CONTEXT_FULL;
     GetThreadContext(hThread, &ctx);
+    mData.pOriginalRip = ctx.Rip;
 
-    // Thread Context'i Shellcode'a Yönlendir
-    MAPPING_DATA mData;
-    mData.pOriginalRip = ctx.Rip; // Eski RIP'i kaydet ki oyun çökmesin
-    // ... mData doldurulur ve hedef sürece yazılır
+    void* pRemoteData = VirtualAllocEx(hProc, nullptr, sizeof(mData), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    WriteProcessMemory(hProc, pRemoteData, &mData, sizeof(mData), nullptr);
 
-    ctx.Rip = (DWORD64)pRemoteShell; // Shellcode'a zıpla
+    void* pRemoteShell = VirtualAllocEx(hProc, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    WriteProcessMemory(hProc, pRemoteShell, Shellcode, 0x1000, nullptr);
+
+    ctx.Rip = (DWORD64)pRemoteShell;
+    ctx.Rcx = (DWORD64)pRemoteData; 
     SetThreadContext(hThread, &ctx);
     
+    // 5. Baslatma ve Gizlilik
     ResumeThread(hThread);
-    printf("[+] Enjeksiyon Tamamlandi. Oyun devam ediyor...\n");
+    
+    BYTE nullBuffer[4096] = { 0 };
+    WriteProcessMemory(hProc, pTargetBase, nullBuffer, 4096, nullptr);
+
+    printf("[SUCCESS] %s basariyla enjekte edildi.\n", DLL_NAME);
+    
+    CloseHandle(hThread);
+    CloseHandle(hProc);
+    delete[] pSrcData;
+    Sleep(3000);
     return 0;
 }
