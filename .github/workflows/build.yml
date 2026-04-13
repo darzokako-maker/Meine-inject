@@ -18,18 +18,24 @@ jobs:
       - name: Injector ve DLL Derle
         shell: cmd
         run: |
-          :: Injector Derleme (Standart EXE)
+          :: Injector Derleme (Konsol Menüsü ve Hijack Motoru Dahil)
           cl.exe /EHsc /O2 /std:c++17 /MT main.cpp /link user32.lib advapi32.lib /out:Injector.exe
           
-          :: DLL Derleme (Kritik: /DYNAMICBASE ve /FIXED:NO eklenmeli ki Relocation tablosu oluşsun)
+          :: DLL Derleme (XOR, PE Header Silme ve Reloc Tablosu Dahil)
           cl.exe /LD /O2 /std:c++17 /MT cheat.cpp /link /DYNAMICBASE /FIXED:NO user32.lib gdi32.lib advapi32.lib /out:cheat.dll
 
       - name: Dosyaları Hazırla ve Doğrula
         shell: cmd
         run: |
-          if not exist Pro-Set mkdir Pro-Set
+          :: Eğer klasör varsa temizle, yoksa oluştur
+          if exist Pro-Set rd /s /q Pro-Set
+          mkdir Pro-Set
+          
+          :: Her iki dosyayı da yeni klasöre kopyala
           copy Injector.exe Pro-Set\
           copy cheat.dll Pro-Set\
+          
+          :: İçeriği kontrol et (Loglarda görünmesi için)
           dir Pro-Set
 
       - name: Paketi Yukle
