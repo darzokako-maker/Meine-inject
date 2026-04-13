@@ -6,7 +6,7 @@
 
 // --- AYARLAR VE YAPILAR ---
 #define TARGET_PROCESS "cs2.exe"
-#define DLL_NAME "hile.dll" // DLL adı hile.dll olarak güncellendi
+#define DLL_NAME "cheat.dll" // DLL adı hile.dll olarak güncellendi
 
 struct MAPPING_DATA {
     void* pImageBase;
